@@ -8,6 +8,7 @@ from collections import defaultdict
 from scipy.stats import qmc
 import os
 import gc
+import pickle
 
 # ==========================================
 # 1. Environment & Network Definitions
@@ -126,7 +127,21 @@ class PolicyValueNetwork(nn.Module):
 # ==========================================
 
 def load_data():
-    print("Loading Knowledge Graph and Embeddings...")
+    cache_file = 'graph_cache.pkl'
+    
+    # --- FAST PATH: If we already built the graph, just load the static files ---
+    if os.path.exists(cache_file):
+        print(">>> Loading cached Knowledge Graph structure and pre-trained Embeddings...")
+        with open(cache_file, 'rb') as f:
+            kg_adj, item_ids, valid_user_ids = pickle.load(f)
+            
+        entity_embeddings = np.load('entity_embeddings.npy')
+        relation_embeddings = np.load('relation_embeddings.npy')
+        
+        return kg_adj, entity_embeddings, relation_embeddings, item_ids, valid_user_ids
+
+    # --- SLOW PATH: First run only (Builds the graph and caches it) ---
+    print(">>> First run detected. Building Knowledge Graph and mapping IDs...")
     ratings = pd.read_csv('./ml-1m/ratings.csv', sep='::', engine='python', names=['UserID', 'MovieID', 'Rating', 'Timestamp'])
     interactions = ratings[['UserID', 'MovieID']].copy()
     interactions['Head'] = 'user_' + interactions['UserID'].astype(str)
@@ -152,16 +167,24 @@ def load_data():
 
     numerical_graph = graph[['Head_ID', 'Relation_ID', 'Tail_ID']].values
 
-    entity_embeddings = np.load('entity_embeddings.npy')
-    relation_embeddings = np.load('relation_embeddings.npy')
-
-    item_ids = {entity_id for name, entity_id in entity_to_id.items() if name.startswith('movie_')}
-    valid_user_ids = [entity_id for name, entity_id in entity_to_id.items() if name.startswith('user_')]
-
+    # Build adjacency list
     kg_adj = defaultdict(list)
     for head, relation, tail in numerical_graph:
         kg_adj[head].append((relation, tail))
-        
+
+    # Extract target IDs
+    item_ids = {entity_id for name, entity_id in entity_to_id.items() if name.startswith('movie_')}
+    valid_user_ids = [entity_id for name, entity_id in entity_to_id.items() if name.startswith('user_')]
+
+    # Load the pre-trained embeddings
+    entity_embeddings = np.load('entity_embeddings.npy')
+    relation_embeddings = np.load('relation_embeddings.npy')
+
+    # Save the structural data to a pickle file for instant loading next time
+    print(">>> Caching graph structure to 'graph_cache.pkl' for faster future runs...")
+    with open(cache_file, 'wb') as f:
+        pickle.dump((kg_adj, item_ids, valid_user_ids), f)
+
     return kg_adj, entity_embeddings, relation_embeddings, item_ids, valid_user_ids
 
 # ==========================================

@@ -360,4 +360,4 @@ def run_hyperparameter_optimization(num_samples=10, episodes_per_trial=25000):
 if __name__ == "__main__":
     # Ensure your kg.txt, ratings.csv, and .npy embeddings are in the directory
     # Adjust `num_samples` (how many hyperparam combos to try) and `episodes_per_trial` (how long to train each)
-    run_hyperparameter_optimization(num_samples=10, episodes_per_trial=30000)
+    run_hyperparameter_optimization(num_samples=25, episodes_per_trial=300000)

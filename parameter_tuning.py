@@ -192,11 +192,10 @@ def load_data():
 # ==========================================
 
 def train_pgpr(env, policy_net, pruner, entity_embeddings, relation_embeddings, valid_user_ids, 
-               config, device, num_episodes=50000): # Lowered episodes for tuning speed; adjust as needed
+               config, device, num_episodes=300000, gamma=0.99): # Lowered episodes for tuning speed; adjust as needed
     
     optimizer = optim.Adam(policy_net.parameters(), lr=config['lr'])
     batch_size = config['batch_size']
-    gamma = config['gamma']
     
     policy_net.train()
     optimizer.zero_grad()
@@ -286,21 +285,28 @@ def train_pgpr(env, policy_net, pruner, entity_embeddings, relation_embeddings, 
 # 4. Hyperparameter Search (Latin Hypercube)
 # ==========================================
 
-def run_hyperparameter_optimization(num_samples=10, episodes_per_trial=25000):
+def run_hyperparameter_optimization(num_samples=10, episodes_per_trial=300000):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Executing on device: {device}")
     
     kg_adj, entity_embeddings, relation_embeddings, item_ids, valid_user_ids = load_data()
     
-    # Define LHS Sampler (4 dimensions: lr, gamma, hd1, hd2)
-    sampler = qmc.LatinHypercube(d=4)
+    # Define LHS Sampler (4 dimensions: lr, hd1, hd2)
+    sampler = qmc.LatinHypercube(d=5)
     sample = sampler.random(n=num_samples)
+
+    l_bounds = [-5.0, 256, 128,  32, 0.2]
+    u_bounds = [-2.0, 1024, 512, 256, 0.5]
     
     # Scale samples to actual hyperparameter ranges
-    lrs = 10 ** (sample[:, 0] * -3 - 2)           # Log scale: 1e-5 to 1e-2
-    gammas = 0.9 + sample[:, 1] * 0.099           # Linear: 0.9 to 0.999
-    hidden_dims_1 = np.floor(256 + sample[:, 2] * (1024 - 256)).astype(int) # 256 to 1024
-    hidden_dims_2 = np.floor(128 + sample[:, 3] * (512 - 128)).astype(int)  # 128 to 512
+    scaled = qmc.scale(sample, l_bounds, u_bounds)
+
+    # Extract and apply data types / math operations
+    lrs           = 10 ** scaled[:, 0]                     # Convert exponents to log scale
+    hidden_dims_1 = np.floor(scaled[:, 1]).astype(int)     # Cast to integer
+    hidden_dims_2 = np.floor(scaled[:, 2]).astype(int)     # Cast to integer
+    batch_sizes   = np.floor(scaled[:, 3]).astype(int)     # Cast to integer
+    dropout_rates = scaled[:, 4]
     
     best_reward = -float('inf')
     best_config = None
@@ -310,10 +316,10 @@ def run_hyperparameter_optimization(num_samples=10, episodes_per_trial=25000):
     for i in range(num_samples):
         config = {
             'lr': float(lrs[i]),
-            'gamma': float(gammas[i]),
             'hidden_dim1': int(hidden_dims_1[i]),
             'hidden_dim2': int(hidden_dims_2[i]),
-            'batch_size': 64 # Kept static, but can be added to LHS if desired
+            'batch_size': int(batch_sizes[i]),
+            'dropout_rate': float(dropout_rates[i])
         }
         
         print(f"\n[Trial {i+1}/{num_samples}] Testing config: {config}")
@@ -325,7 +331,8 @@ def run_hyperparameter_optimization(num_samples=10, episodes_per_trial=25000):
             state_dim=400, 
             action_space_size=400,
             hidden_dim1=config['hidden_dim1'],
-            hidden_dim2=config['hidden_dim2']
+            hidden_dim2=config['hidden_dim2'],
+            dropout_rate=config['dropout_rate']
         ).to(device) # Move model to GPU
         
         # Train and get evaluation metric
@@ -360,4 +367,4 @@ def run_hyperparameter_optimization(num_samples=10, episodes_per_trial=25000):
 if __name__ == "__main__":
     # Ensure your kg.txt, ratings.csv, and .npy embeddings are in the directory
     # Adjust `num_samples` (how many hyperparam combos to try) and `episodes_per_trial` (how long to train each)
-    run_hyperparameter_optimization(num_samples=25, episodes_per_trial=300000)
+    run_hyperparameter_optimization(num_samples=10, episodes_per_trial=300000)

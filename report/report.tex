@@ -91,25 +91,27 @@
 \maketitle
 
 \begin{abstract}
-Recommender systems help users find items they are likely to enjoy, but many modern methods are hard to interpret because they rely on hidden user and item embeddings. 
-In this project, we adapt Policy-Guided Path Reasoning (PGPR), a reinforcement learning method for explainable recommendation to a movie recommendation task using 
-MovieLens-1M. Instead of predicting ratings directly, we treat recommendation as a graph navigation problem. An agent starts at a user node in a heterogeneous knowledge 
+Recommender systems are used to help users find items they are likely to enjoy. Unfortunately, many modern methods are hard to interpret because they rely on hidden user and item embeddings. 
+In this project, we adapt the application of Policy-Guided Path Reasoning (PGPR), a reinforcement learning method for explainable recommendation, to a movie recommendation task using 
+the MovieLens-1M dataset. Instead of predicting ratings directly, we treat recommendation as a graph navigation problem. An agent starts at a user node in a heterogeneous knowledge 
 graph and learns to follow multi-hop paths toward movie nodes. The graph combines user-movie interactions with movie metadata relations from a Freebase-style schema. 
 Our implementation uses pretrained TransE embeddings, user-conditional action pruning, and a policy/value network trained with REINFORCE. At inference time, beam search 
-returns candidate movie recommendations, and the paths used to reach those movies are kept as explanations.
+returns candidate movie recommendations, and the paths used to reach those movies are kept as explanations. To expand on the paper, we look into the influences that the learning rate, batch size, 
+and dropout have on the training process, as well as which choice is optimal. After analyzing the hyperparameters, we studied the behaviour of the algorithm when we restrict the relations between 
+users and movies to only include movies rated 3-stars or above. 
 \end{abstract}
 
 \section{Introduction}
 Recommendation systems are used in many everyday platforms, from streaming services and online stores to music apps and social media. Their goal is to predict which 
 items a user is likely to enjoy based on what they have interacted with before. Many recommender systems do this through collaborative filtering or latent embeddings, 
-where users and items are represented as vectors and recommendations come from similarity in that hidden space. These methods can be effective, but they usually do not 
+where users and items are represented as vectors and recommendations come from similarities within this hidden space. These methods can be effective, but they usually do not 
 explain why a specific item was recommended. 
 
 This project focuses on explainable recommendation. In a movie setting, an explanation could be something like: this movie was recommended because it shares a director 
 with one the user liked, belongs to the same genre, or was watched by other users with similar taste. Knowledge graphs are useful here because they make these 
-relationships explicit, connecting users, movies, and movie-related entities through typed edges rather than only as hidden vectors.
+relationships explicit, connecting users, movies, and movie-related entities through typed edges rather than hidden vectors.
 
-We base our project on Policy-Guided Path Reasoning (PGPR) [Xian et al., 2019], a reinforcement learning approach that treats recommendation as a Markov decision 
+We base our project on Policy-Guided Path Reasoning (PGPR) [\cite{dapaper}], a reinforcement learning approach that treats recommendation as a Markov decision 
 process over a knowledge graph. The agent starts at a user node and learns to move through the graph toward item nodes. The path it takes is important because it is not 
 just a byproduct of the model; it is also the explanation for the recommendation. This is different from post-hoc explanation methods, where a system recommends an item 
 first and then tries to find a reasonable explanation afterward.
@@ -118,9 +120,9 @@ The original paper tests this idea on Amazon e-commerce datasets. We instead app
 movie-attribute relations (genre, director, writer, star, language, country, rating). Our goal is to implement the main PGPR mechanism in this new setting, including 
 the MDP setup, action pruning, soft terminal reward, and beam-search inference, and to study how it behaves for movie recommendation.
 
-A knowledge graph (KG) is defined as a graph where entities are connected via typed relations. In this work, entities encompass users, movies, and specific 
-movie attributes including genres, directors, writers, stars, languages, countries, and ratings. By integrating user-movie interactions with movie metadata, 
-the model is able to reason through explicit paths rather than relying solely on latent embeddings. 
+\section{Background}
+A knowledge graph (KG) is defined as a graph where entities are connected via typed relations. In this work, entities encompass users, movies, and the 
+movie attributes. By integrating user-movie interactions with movie metadata, the model is able to reason through explicit paths rather than relying solely on latent embeddings. 
 
 These paths provide interpretable reasoning for recommendations. For example:
 \begin{itemize}
@@ -149,47 +151,43 @@ These embeddings are frozen during RL training and used for state representation
 \subsection{MDP Formulation}
 Recommendation is treated as a finite-horizon MDP starting at a user node.
 
-\paragraph{State Representation} At step $t$, the state is represented as:
-\begin{equation}
-    s_t = (u, e_t, e_{t-1}, r_t)
-\end{equation}
-where $u$ is the starting user, $e_t$ the current entity, $e_{t-1}$ the previous entity, and $r_t$ the previous relation. This results in a 400-dimensional state vector.
-
-\paragraph{Actions and Transitions} An action $a_t = (r_{t+1}, e_{t+1})$ is an outgoing edge. Transitions are deterministic with a horizon of $T=3$. We mask actions that 
-revisit previous entities or return to the starting user.
-
-\paragraph{Reward Function} A soft terminal reward is given if the final node $e_T$ is a movie:
-\begin{equation}
-    R_T = 
-    \begin{cases} 
-    \max\left(0, \frac{\langle u, e_T \rangle}{\max_{i \in I} \langle u, i \rangle}\right) & \text{if } e_T \text{ is a movie} \\
-    0 & \text{otherwise} 
-    \end{cases}
-\end{equation}
-where $I$ is the set of movie nodes. Per-user normalization ensures $R_T \in [0, 1]$.
+\begin{itemize}
+    \item \textbf{State Representation}: At time step $t$, the state is represented as:
+        \begin{equation}
+            s_t = (u, e_t, e_{t-1}, r_t)
+        \end{equation}
+        where $u$ is the starting user, $e_t$ is the current entity, $e_{t-1}$ is the previous entity, and $r_t$ is the previous relation. This results in a 400-dimensional state vector.
+    \item \textbf{Actions and Transitions}: An action $a_t = (r_{t+1}, e_{t+1})$ is an outgoing edge. Transitions are deterministic with a horizon of $T=3$. We mask actions that 
+        revisit previous entities or return to the starting user.
+    \item \textbf{Reward Function}: A soft terminal reward is given if the final node $e_T$ is a movie:
+        \begin{equation}
+            R_T = 
+            \begin{cases} 
+            \max\left(0, \frac{\langle u, e_T \rangle}{\max_{i \in I} \langle u, i \rangle}\right) & \text{if } e_T \text{ is a movie} \\
+            0 & \text{otherwise} 
+            \end{cases}
+        \end{equation}
+        where $I$ is the set of movie nodes. Per-user normalization ensures $R_T \in [0, 1]$.
+\end{itemize}
 
 \subsection{User-Conditional Action Pruning}
 To bound the action space, we prune actions for each user $u$ by scoring candidate edges:
 \begin{equation}
-    f((r, e) | u) = \langle u + r, e \rangle 
+    f((r, e) | u) = \langle u + r, e \rangle .
 \end{equation}
 We retain only the top $\alpha=400$ actions.
 
 \subsection{Training and Inference}
-\paragraph{Network Architecture} The policy/value network uses two fully connected layers with ELU activations and dropout. The policy head outputs a distribution over 
-pruned actions, while the value head estimates the return.
+The policy/value network uses two fully connected layers with ELU activations and dropout. The policy head outputs a distribution over 
+pruned actions, while the value head estimates the return. We train the network with REINFORCE, utilizing the value head as a baseline to reduce variance. 
+We use the Adam optimizer with a batch size of 64 episodes and clip the global gradient norm at 1.0. Notably, our implementation omits the entropy regularizer 
+and training-time action dropout used in the original PGPR. This is due to time constraints and lack of processing power given by our setup.
 
-\paragraph{Optimization} We train with REINFORCE, utilizing the value head as a baseline to reduce variance. We use Adam with a batch size of 64 episodes and clip the 
-global gradient norm at 1.0. Notably, our implementation omits the entropy regularizer and training-time action dropout used in the original PGPR.
-
-\paragraph{Inference} At inference time, we perform beam search with $K=(25, 5, 1)$ across the three hops. We deduplicate paths to the same movie by keeping the 
+For inference, we perform beam search with $K=(25, 5, 1)$ across the three hops. We deduplicate paths to the same movie by keeping the 
 highest-probability path and ranking the final recommendations by terminal reward. This provides both the recommendation and the explanatory path.
 
-
+\newpage
 \bibliographystyle{plainnat}
 \bibliography{references} % Ensure you have a references.bib file
-
-% Example citation
-For more details, see \cite{example_reference}.
 
 \end{document}

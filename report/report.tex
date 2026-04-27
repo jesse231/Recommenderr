@@ -1,0 +1,195 @@
+\documentclass{article}
+
+% NeurIPS formatting (use 'final' for names to show, or 'preprint' for a generic header)
+\usepackage[final]{neurips_2023}
+
+% Encoding and language
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+
+% Math and symbols
+\usepackage{amsmath, amsfonts, amssymb, amsthm, mathtools}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+% Graphics and figures
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+
+% Colors and hyperlinks
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    filecolor=magenta,
+    urlcolor=blue,
+}
+
+% Tables
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage[shortlabels]{enumitem}
+
+% Code listings
+\usepackage{listings}
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    showstringspaces=false,
+    breaklines=true,
+}
+
+% Custom commands
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\tr}{\text{tr}}
+
+\makeatletter
+\newcommand{\distas}[1]{\mathbin{\overset{#1}{\kern\z@\sim}}}
+\makeatother
+
+% Theorem environments
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{corollary}{Corollary}
+\newtheorem{proposition}[theorem]{Proposition}
+
+% Title and Author Information
+\title{Recommender? I Hardly Know Her!}
+
+\author{%
+  Perry Santry \\
+  Department of Computer Science\\
+  McGill University\\
+  \texttt{perry.santry@mail.mcgill.ca} \\
+  \And
+  Joseph Crazylastname \\
+  Department of Computer Science\\
+  McGill University\\
+  \texttt{joseph.c@mail.mcgill.ca} \\
+  \And
+  Jesse Seeligsohn \\
+  Department of Computer Science\\
+  McGill University\\
+  \texttt{jesse.s@mail.mcgill.ca} \\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Recommender systems help users find items they are likely to enjoy, but many modern methods are hard to interpret because they rely on hidden user and item embeddings. 
+In this project, we adapt Policy-Guided Path Reasoning (PGPR), a reinforcement learning method for explainable recommendation to a movie recommendation task using 
+MovieLens-1M. Instead of predicting ratings directly, we treat recommendation as a graph navigation problem. An agent starts at a user node in a heterogeneous knowledge 
+graph and learns to follow multi-hop paths toward movie nodes. The graph combines user-movie interactions with movie metadata relations from a Freebase-style schema. 
+Our implementation uses pretrained TransE embeddings, user-conditional action pruning, and a policy/value network trained with REINFORCE. At inference time, beam search 
+returns candidate movie recommendations, and the paths used to reach those movies are kept as explanations.
+\end{abstract}
+
+\section{Introduction}
+Recommendation systems are used in many everyday platforms, from streaming services and online stores to music apps and social media. Their goal is to predict which 
+items a user is likely to enjoy based on what they have interacted with before. Many recommender systems do this through collaborative filtering or latent embeddings, 
+where users and items are represented as vectors and recommendations come from similarity in that hidden space. These methods can be effective, but they usually do not 
+explain why a specific item was recommended. 
+
+This project focuses on explainable recommendation. In a movie setting, an explanation could be something like: this movie was recommended because it shares a director 
+with one the user liked, belongs to the same genre, or was watched by other users with similar taste. Knowledge graphs are useful here because they make these 
+relationships explicit, connecting users, movies, and movie-related entities through typed edges rather than only as hidden vectors.
+
+We base our project on Policy-Guided Path Reasoning (PGPR) [Xian et al., 2019], a reinforcement learning approach that treats recommendation as a Markov decision 
+process over a knowledge graph. The agent starts at a user node and learns to move through the graph toward item nodes. The path it takes is important because it is not 
+just a byproduct of the model; it is also the explanation for the recommendation. This is different from post-hoc explanation methods, where a system recommends an item 
+first and then tries to find a reasonable explanation afterward.
+
+The original paper tests this idea on Amazon e-commerce datasets. We instead apply it to MovieLens-1M, where the graph mainly contains user-movie interactions and seven 
+movie-attribute relations (genre, director, writer, star, language, country, rating). Our goal is to implement the main PGPR mechanism in this new setting, including 
+the MDP setup, action pruning, soft terminal reward, and beam-search inference, and to study how it behaves for movie recommendation.
+
+A knowledge graph (KG) is defined as a graph where entities are connected via typed relations. In this work, entities encompass users, movies, and specific 
+movie attributes including genres, directors, writers, stars, languages, countries, and ratings. By integrating user-movie interactions with movie metadata, 
+the model is able to reason through explicit paths rather than relying solely on latent embeddings. 
+
+These paths provide interpretable reasoning for recommendations. For example:
+\begin{itemize}
+    \item \textbf{Content-based reasoning:} A path such as $\text{user} \to \text{movie} \to \text{genre} \to \text{movie}$ indicates a recommendation based on shared 
+        genres from the user's history.
+    \item \textbf{Collaborative filtering:} A path such as $\text{user} \to \text{movie} \to \text{user} \to \text{movie}$ suggests a recommendation derived from another 
+        user with similar tastes.
+\end{itemize}
+
+Policy-Guided Path Reasoning (PGPR) formulates this search as a Markov Decision Process (MDP) where an agent takes a fixed number of steps from a starting user node. The 
+final entity reached is the recommendation, and the trajectory serves as the explanation. To address the lack of a single "correct" target, PGPR utilizes a soft terminal 
+reward to score item relevance. To manage large action spaces, user-conditional action pruning is employed to retain only the most promising edges. The policy is optimized 
+using REINFORCE with a learned value head baseline.
+
+\section{Methodology}
+
+\subsection{Knowledge Graph Construction}
+We construct a heterogeneous KG using MovieLens-1M ratings and a Freebase-derived movie KG. Ratings of 3 or higher are treated as positive interactions. We include seven 
+metadata relations: genre, director, writer, star, language, country, and rating. The graph includes reverse edges to allow bidirectional navigation and self-loops as no-op 
+actions. The resulting graph contains 16,754 entities and 9 relation types.
+
+\subsection{Pretrained Embeddings}
+We utilize 100-dimensional TransE embeddings for entities and relations. These were trained for 50 epochs using PyKEEN with the Adam optimizer ($lr=1e-4$, batch size 64). 
+These embeddings are frozen during RL training and used for state representation, action scoring, and rewards.
+
+\subsection{MDP Formulation}
+Recommendation is treated as a finite-horizon MDP starting at a user node.
+
+\paragraph{State Representation} At step $t$, the state is represented as:
+\begin{equation}
+    s_t = (u, e_t, e_{t-1}, r_t)
+\end{equation}
+where $u$ is the starting user, $e_t$ the current entity, $e_{t-1}$ the previous entity, and $r_t$ the previous relation. This results in a 400-dimensional state vector.
+
+\paragraph{Actions and Transitions} An action $a_t = (r_{t+1}, e_{t+1})$ is an outgoing edge. Transitions are deterministic with a horizon of $T=3$. We mask actions that 
+revisit previous entities or return to the starting user.
+
+\paragraph{Reward Function} A soft terminal reward is given if the final node $e_T$ is a movie:
+\begin{equation}
+    R_T = 
+    \begin{cases} 
+    \max\left(0, \frac{\langle u, e_T \rangle}{\max_{i \in I} \langle u, i \rangle}\right) & \text{if } e_T \text{ is a movie} \\
+    0 & \text{otherwise} 
+    \end{cases}
+\end{equation}
+where $I$ is the set of movie nodes. Per-user normalization ensures $R_T \in [0, 1]$.
+
+\subsection{User-Conditional Action Pruning}
+To bound the action space, we prune actions for each user $u$ by scoring candidate edges:
+\begin{equation}
+    f((r, e) | u) = \langle u + r, e \rangle 
+\end{equation}
+We retain only the top $\alpha=400$ actions.
+
+\subsection{Training and Inference}
+\paragraph{Network Architecture} The policy/value network uses two fully connected layers with ELU activations and dropout. The policy head outputs a distribution over 
+pruned actions, while the value head estimates the return.
+
+\paragraph{Optimization} We train with REINFORCE, utilizing the value head as a baseline to reduce variance. We use Adam with a batch size of 64 episodes and clip the 
+global gradient norm at 1.0. Notably, our implementation omits the entropy regularizer and training-time action dropout used in the original PGPR.
+
+\paragraph{Inference} At inference time, we perform beam search with $K=(25, 5, 1)$ across the three hops. We deduplicate paths to the same movie by keeping the 
+highest-probability path and ranking the final recommendations by terminal reward. This provides both the recommendation and the explanatory path.
+
+
+\bibliographystyle{plainnat}
+\bibliography{references} % Ensure you have a references.bib file
+
+% Example citation
+For more details, see \cite{example_reference}.
+
+\end{document}

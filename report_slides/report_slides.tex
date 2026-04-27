@@ -1,0 +1,119 @@
+\documentclass[10pt]{beamer}
+
+% Theme Choice
+\usetheme{metropolis} 
+\usepackage{appendixnumberbeamer}
+\usepackage{booktabs}
+\usepackage{amsmath, amsfonts, amssymb}
+
+% Title Information
+\title{Recommender? I Hardly Know Her!}
+\subtitle{Policy-Guided Path Reasoning for Movie Recommendations}
+\date{\today}
+\author{Perry Santry, Joseph Crazylastname, Jesse Seeligsohn}
+\institute{Comp 579 Project --- McGill University}
+
+\begin{document}
+
+\maketitle
+
+\begin{frame}{Project Overview}
+    \begin{itemize}
+        \item Modern recommender systems often rely on "black-box" latent embeddings that lack interpretability.
+        \item This project adapts \textbf{Policy-Guided Path Reasoning (PGPR)} to the \textbf{MovieLens-1M} dataset.
+        \item Recommendation is treated as a \textbf{graph navigation problem} where an agent learns to find paths through a heterogeneous knowledge graph.
+        \item The resulting paths serve as explicit explanations for the recommendations.
+    \end{itemize}
+\end{frame}
+
+\section{Background}
+
+\begin{frame}{Knowledge Graphs (KG)}
+    \begin{itemize}
+        \item Entities (users, movies, attributes) are connected by typed relations.
+        \item The graph combines user-movie interactions with metadata (genre, director, etc.) from a Freebase-style schema.
+        \item \textbf{Interpretable Reasoning Paths:}
+        \begin{itemize}
+            \item \textit{Content-based:} $user \to movie \to genre \to movie$.
+            \item \textit{Collaborative:} $user \to movie \to user \to movie$.
+        \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\section{Methodology}
+
+\begin{frame}{State Encoding: A Design Choice}
+    \begin{itemize}
+        \item \textbf{Ekar Approach:} Uses an \textbf{LSTM} to encode the full sequence of entities and relations [cite: 208-210].
+        \item \textbf{PGPR Approach (Our Implementation):} Uses \textbf{Concatenation} of the starting user, current entity, previous entity, and previous relation.
+        \item \textbf{State Vector:} $s_t = [u; e_t; e_{t-1}; r_t]$.
+        \item \textbf{Rationale:} Concatenation is computationally efficient and sufficient for short-horizon (3-hop) reasoning.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{MDP and Soft Reward Strategy}
+    \begin{itemize}
+        \item \textbf{Horizon:} $T=3$ hops.
+        \item \textbf{Soft Terminal Reward:} Scores relevance of the final movie $e_T$ to user $u$.
+        \[ R_T = \begin{cases} \max(0, \frac{\langle u, e_T \rangle}{\max_{i \in I} \langle u, i \rangle}) & \text{if } e_T \in I \\ 0 & \text{otherwise} \end{cases} \] 
+        \item Rewards are normalized to $[0, 1]$ to stabilize training across diverse user embedding scales.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Action Pruning and Policy Search}
+    \begin{itemize}
+        \item \textbf{User-Conditional Pruning:} Limits the action space to $\alpha = 400$ by scoring edges: $f((r, e)|u) = \langle u+r, e \rangle$.
+        \item \textbf{Policy Network:} Two-layer MLP with ELU activations trained via REINFORCE.
+        \item \textbf{Inference:} Beam search with $K=(25, 5, 1)$ to find diverse, high-probability recommendation paths.
+    \end{itemize}
+\end{frame}
+
+\section{Analysis and Results}
+
+\begin{frame}{Experimental Benchmarking (MovieLens-1M)}
+    \begin{itemize}
+        \item Comparison of reporting for KG-based methods on the MovieLens-1M dataset:
+    \end{itemize}
+    \begin{table}
+        \centering
+        \begin{tabular}{lrr}
+            \toprule
+            \textbf{Model} & \textbf{HR@10} & \textbf{NDCG@10} \\
+            \midrule
+            BPR-MF (Baseline) & 0.0895 & 0.1914 \\
+            KTUP & 0.1579 & 0.3230 \\
+            \textbf{Ekar (RL)} & \textbf{0.1889} & \textbf{0.3543} \\
+            \bottomrule
+        \end{tabular}
+        \caption{Baseline results on MovieLens-1M.}
+    \end{table}
+\end{frame}
+
+\begin{frame}{Frequent Path Patterns (Explainability)}
+    \begin{itemize}
+        \item Analysis of reasoning paths on MovieLens-1M reveals the agent's strategy:
+        \item \textbf{Collaborative Logic (94.4\%):} $User \to Movie \to User \to Movie$.
+        \item \textbf{Content Logic (1.5\%):} $User \to Movie \to Genre \to Movie$.
+        \item \textbf{Finding:} The agent primarily discovers collaborative filtering paths, navigating to items liked by users with similar tastes.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Ablation Study: Why It Works}
+    \begin{itemize}
+        \item \textbf{Reward Shaping:} Crucial for convergence; without it, the agent receives zero reward for any item not already in the user's history.
+        \item \textbf{Action Pruning:} Essential for filtering noise; smaller pruned spaces often lead to better performance by prioritizing high-relevance edges.
+        \item \textbf{Path Length ($T=3$):} Increasing length (e.g., $T=5$) often degrades performance due to increased noise in long-order similarities.
+    \end{itemize}
+\end{frame}
+
+\section{Conclusion}
+
+\begin{frame}{Conclusion}
+    \begin{itemize}
+        \item Adapted the PGPR architecture to a movie recommendation setting.
+        \item Demonstrated that RL agents can effectively navigate knowledge graphs to provide both accurate and interpretable results.
+        \item Future work could involve incorporating more complex domain-specific reward functions.
+    \end{itemize}
+\end{frame}
+
+\end{document}

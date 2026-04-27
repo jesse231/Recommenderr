@@ -1,3 +1,9 @@
 .venv/
 train_triplets.txt
 .DS_Store
+
+report.*
+!report.tex
+
+report_slides.*
+!report_slides.tex

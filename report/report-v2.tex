@@ -1,0 +1,262 @@
+\documentclass{article}
+
+% NeurIPS formatting
+\usepackage[final]{neurips_2023}
+
+% Encoding and language
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+
+% Math and symbols
+\usepackage{amsmath, amsfonts, amssymb, amsthm, mathtools}
+
+% Graphics and figures
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+
+% Colors and hyperlinks
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    filecolor=magenta,
+    urlcolor=blue,
+}
+
+% Tables
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage[shortlabels]{enumitem}
+
+% Custom commands
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+
+% Title and Author Information
+\title{Recommender? I Hardly Know Her!}
+
+\author{%
+  Perry Santry \\
+  Department of Computer Science\\
+  McGill University\\
+  \texttt{perry.santry@mail.mcgill.ca} \\
+  \And
+  Jonatan Lebensztajn Shahrabani \\
+  Department of Computer Science\\
+  McGill University\\
+  \texttt{jonatan.lebensztajnshahrabani@mail.mcgill.ca} \\
+  \And
+  Jesse Seeligsohn \\
+  Department of Computer Science\\
+  McGill University\\
+  \texttt{jesse.s@mail.mcgill.ca} \\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Recommender systems are used to help users find items they are likely to enjoy. Unfortunately, many modern methods are hard to interpret because they rely on hidden user and item embeddings. In this project, we adapt Policy-Guided Path Reasoning (PGPR), a reinforcement learning method for explainable recommendation, to a movie recommendation task using the MovieLens-1M dataset. Instead of predicting ratings directly, we treat recommendation as a graph navigation problem. An agent starts at a user node in a heterogeneous knowledge graph and learns to follow multi-hop paths toward movie nodes. The graph combines user-movie interactions with movie metadata relations from a Freebase-style schema. Our implementation uses pretrained TransE embeddings, user-conditional action pruning, and a policy/value network trained with REINFORCE. At inference time, beam search returns candidate movie recommendations, and the paths used to reach those movies are kept as explanations. We also study the effects of learning rate, batch size, and dropout on training, and compare the full interaction graph against a restricted graph that only keeps user-movie interactions with ratings of at least 3 stars.
+\end{abstract}
+
+\section{Introduction}
+
+Recommendation systems are used in many everyday platforms, from streaming services and online stores to music apps and social media. Their goal is to predict which items a user is likely to enjoy based on what they have interacted with before. Many recommender systems do this through collaborative filtering or latent embeddings, where users and items are represented as vectors and recommendations come from similarities within this hidden space. These methods can be effective, but they usually do not explain why a specific item was recommended.
+
+This project focuses on explainable recommendation. In a movie setting, an explanation could be something like: this movie was recommended because it shares a director with one the user liked, belongs to the same genre, or was watched by other users with similar taste. Knowledge graphs are useful here because they make these relationships explicit, connecting users, movies, and movie-related entities through typed edges rather than hidden vectors.
+
+We base our project on Policy-Guided Path Reasoning (PGPR) \citep{xian2019pgpr}, a reinforcement learning approach that treats recommendation as a Markov decision process over a knowledge graph. The agent starts at a user node and learns to move through the graph toward item nodes. The path it takes is important because it is not just a byproduct of the model; it is also the explanation for the recommendation. This is different from post-hoc explanation methods, where a system recommends an item first and then tries to find a reasonable explanation afterward.
+
+The original paper tests this idea on Amazon e-commerce datasets. We instead apply it to MovieLens-1M, where the graph mainly contains user-movie interactions and seven movie-attribute relations: genre, director, writer, star, language, country, and rating. Our goal is to implement the main PGPR mechanism in this new setting, including the MDP setup, action pruning, soft terminal reward, and beam-search inference, and to study how it behaves for movie recommendation.
+
+\section{Background}
+
+A knowledge graph (KG) is a graph where entities are connected via typed relations. In this work, entities include users, movies, and movie attributes. By integrating user-movie interactions with movie metadata, the model is able to reason through explicit paths rather than relying only on latent embeddings.
+
+These paths provide interpretable reasoning for recommendations. For example:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Content-based reasoning:} A path such as
+    $\text{user} \to \text{movie} \to \text{genre} \to \text{movie}$
+    indicates a recommendation based on shared genres from the user's history.
+    \item \textbf{Collaborative filtering:} A path such as
+    $\text{user} \to \text{movie} \to \text{user} \to \text{movie}$
+    suggests a recommendation derived from another user with similar taste.
+\end{itemize}
+
+PGPR formulates this search as a Markov Decision Process (MDP) where an agent takes a fixed number of steps from a starting user node. The final entity reached is the recommendation, and the trajectory serves as the explanation. To address the lack of a single ``correct'' target item, PGPR uses a soft terminal reward to score item relevance. To manage large action spaces, user-conditional action pruning is used to keep only the most promising edges. The policy is optimized using REINFORCE with a learned value head baseline.
+
+\section{Methodology}
+
+\subsection{Knowledge Graph Construction}
+
+We construct a heterogeneous KG using MovieLens-1M ratings and a Freebase-derived movie KG. In the baseline graph, observed user-movie ratings are converted into interaction triples of the form
+\[
+\texttt{user\_X} \xrightarrow{\texttt{user.interact.movie}} \texttt{movie\_Y}.
+\]
+We include seven metadata relations: genre, director, writer, star, language, country, and rating. The graph also includes reverse edges to allow bidirectional navigation and self-loops as no-op actions. The final full graph used by our embeddings contains 16,754 entities and 9 relation types.
+
+\subsection{Pretrained Embeddings}
+
+We use 100-dimensional TransE embeddings for entities and relations \citep{bordes2013transe}. These were trained for 50 epochs using PyKEEN with the Adam optimizer, learning rate $10^{-4}$, and batch size 64. The embeddings are frozen during RL training and used for state representation, action scoring, and rewards.
+
+\subsection{MDP Formulation}
+
+Recommendation is treated as a finite-horizon MDP starting at a user node. At time step $t$, the state is represented as
+\begin{equation}
+    s_t = (u, e_t, e_{t-1}, r_t),
+\end{equation}
+where $u$ is the starting user, $e_t$ is the current entity, $e_{t-1}$ is the previous entity, and $r_t$ is the previous relation. Since each embedding is 100-dimensional, this gives a 400-dimensional state vector.
+
+An action is an outgoing edge,
+\begin{equation}
+    a_t = (r_{t+1}, e_{t+1}),
+\end{equation}
+and transitions are deterministic. We use a horizon of $T=3$ and mask actions that revisit previous entities or return to the starting user.
+
+A soft terminal reward is given if the final node $e_T$ is a movie:
+\begin{equation}
+    R_T =
+    \begin{cases}
+    \max\left(0, \dfrac{\langle u, e_T \rangle}{\max_{i \in \mathcal{I}} \langle u, i \rangle}\right), & \text{if } e_T \in \mathcal{I}, \\
+    0, & \text{otherwise},
+    \end{cases}
+\end{equation}
+where $\mathcal{I}$ is the set of movie nodes. This follows the same soft-reward idea as PGPR, but uses our simplified normalized user-movie embedding score. The normalization makes rewards more comparable across users.
+
+\subsection{User-Conditional Action Pruning}
+
+To bound the action space, we prune actions for each user $u$ by scoring candidate edges with a TransE-style function:
+\begin{equation}
+    f((r, e) \mid u) = \langle u + r, e \rangle .
+\end{equation}
+We retain only the top $\alpha=400$ actions. This makes the policy output fixed-size while still allowing the agent to choose from the most relevant outgoing edges.
+
+\subsection{Training and Inference}
+
+The policy/value network uses two fully connected layers with ELU activations and dropout. The policy head outputs a distribution over pruned actions, while the value head estimates the return. We train the network with REINFORCE, using the value head as a baseline to reduce variance. We use the Adam optimizer, batch updates, and clip the global gradient norm at 1.0. Our implementation omits the entropy regularizer and training-time action dropout used in the original PGPR setup.
+
+For inference, we perform beam search with $K=(25,5,1)$ across the three hops. We deduplicate paths to the same movie by keeping the highest-probability path and rank final recommendations by terminal reward. This gives both a recommendation and an explanatory path.
+
+\section{Results}
+
+We evaluate our PGPR implementation in three ways. First, we look at training dynamics for a long baseline run. Second, we sweep learning rate, batch size, and dropout to understand which settings allow the agent to escape the low-reward regime. Third, we inspect the reasoning paths produced at inference time and compare the full graph against a restricted 3-star interaction graph.
+
+\subsection{Training Dynamics}
+
+Figure~\ref{fig:training_dynamics} shows the average batch reward and loss for a 300,000-episode baseline run using our initial PGPR-style settings: learning rate $10^{-4}$, batch size 64, dropout 0.5, horizon $T=3$, and $\gamma=0.99$. The reward stays near a low-reward regime of about 0.05 for the first 60,000--70,000 episodes, then jumps sharply and remains mostly between 0.15 and 0.30 for the rest of training. This suggests that the agent spends a long period exploring before discovering a useful path-following strategy.
+
+The loss curve is noisy and does not show the kind of smooth monotonic decrease we would expect in supervised learning. This is not surprising for REINFORCE, since the loss depends heavily on sampled trajectories and high-variance returns. For this reason, average reward is a more useful indicator of learning progress than loss in our experiments.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{output2.png}
+    \caption{Training reward and loss for the baseline run on the full graph and the 3-star restricted variant.}
+    \label{fig:training_dynamics}
+\end{figure}
+
+\subsection{Hyperparameter Sensitivity}
+
+To understand when the agent actually learns, we ran a one-at-a-time sweep over learning rate, batch size, and dropout while keeping the other settings fixed at our baseline values. Each run lasted 50,000 episodes. This budget is shorter than the full baseline run, so these plots mainly measure how quickly each setting begins to learn.
+
+The learning-rate sweep shows the clearest effect. With learning rates $10^{-4}$ and $10^{-5}$, the model stays near the initial low-reward region for the full 50,000 episodes. In contrast, $10^{-3}$ and $5 \times 10^{-4}$ escape this region within roughly 10,000--20,000 episodes and reach rewards around 0.20. This suggests that the initial conservative learning rate was too slow for our MovieLens graph within a limited training budget.
+
+Batch size also has a strong effect. Batch size 32 is the only setting that begins to reach the higher-reward regime within 50,000 episodes. Larger batch sizes are more stable, but they remain near the low-reward region. This suggests that smaller, noisier updates may help exploration in our sparse-reward setting.
+
+Dropout shows a similar pattern. Dropout rates 0.2 and 0.3 eventually reach higher rewards, while 0.4 and 0.5 remain much closer to the low-reward region. In our implementation, dropout is applied inside the policy/value network, so high dropout may make it harder for the policy to consistently reinforce useful paths.
+
+Overall, the sweep shows that the model is sensitive to optimization settings. Within a fixed episode budget, higher learning rates, smaller batches, and lower dropout make the agent learn much faster.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{output.png}
+    \caption{Hyperparameter sweep over 50,000 episodes. The model learns fastest with learning rates at least $5 \times 10^{-4}$, batch size 32, and dropout at most 0.3.}
+    \label{fig:hyperparams}
+\end{figure}
+
+\subsection{Path Reasoning Case Study}
+
+Since PGPR is meant to produce explanations, we also inspected the paths generated at inference time. We ran the trained baseline policy on 10 randomly sampled users using random seed 42 and looked at the top 10 recommendations for each user. Beam search returned between 90 and 125 valid paths per user, which deduplicated to between 85 and 122 unique recommended movies.
+
+The main qualitative result is that the policy relied almost entirely on collaborative-filtering-style paths. Across all 100 inspected recommendations, every top recommendation used the interaction relation at each hop and followed the pattern
+\[
+\text{user} \to \text{movie} \to \text{user} \to \text{movie}.
+\]
+This means the model was effectively recommending movies through other users with overlapping movie histories. None of the inspected top recommendations used metadata relations such as genre, director, writer, star, language, country, or rating. Table~\ref{tab:paths} shows three examples.
+
+\begin{table}[H]
+\centering
+\caption{Example recommendations and reasoning paths from the baseline model.}
+\label{tab:paths}
+\begin{tabular}{lll}
+\toprule
+User & Recommended Movie & Reasoning Path \\
+\midrule
+\texttt{user\_3083} & Footloose (1984) &
+\texttt{user\_3083} $\to$ What About Bob? $\to$ \texttt{user\_4464} $\to$ Footloose \\
+\texttt{user\_2937} & Impostors (1998) &
+\texttt{user\_2937} $\to$ Sabrina (1995) $\to$ \texttt{user\_5394} $\to$ Impostors \\
+\texttt{user\_1265} & Trainspotting (1996) &
+\texttt{user\_1265} $\to$ Man on the Moon $\to$ \texttt{user\_3411} $\to$ Trainspotting \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This result shows both the strength and limitation of our implementation. The model does produce clear reasoning paths, which is the main explainability goal of PGPR. However, the explanations are not very diverse: in this sample, they all reduce to a collaborative-filtering pattern rather than using movie metadata.
+
+\subsection{Restricted-Graph Variant}
+
+We also trained a restricted version of the graph where user-movie interaction edges were kept only for ratings of at least 3 stars. The intuition was that removing low-rated interactions might produce a cleaner graph. This model was trained for 300,000 episodes with batch size 256, and its trajectory is shown in Figure~\ref{fig:training_dynamics}.
+
+The restricted-graph model did not converge. Its reward stayed near 0.05 for the whole run, while the full-graph baseline eventually reached much higher rewards. There are two possible explanations, and we cannot separate them from this single run. First, filtering to ratings $\geq 3$ removes many user-movie edges, making the graph sparser and reducing the number of user-movie-user-movie paths that the baseline policy relied on. Second, the restricted run used batch size 256, which our hyperparameter sweep also found to be a poor setting for early learning.
+
+Even with this confound, the result suggests that graph connectivity is important for our PGPR-style model. Filtering interactions may make the graph semantically cleaner, but in this sparse-reward path-search setting, removing edges can also remove many of the paths the agent needs in order to receive reward.
+
+\subsection{Discussion}
+
+Our results show that the core PGPR mechanism can be adapted to MovieLens, but the behaviour is different from the original Amazon experiments. The original PGPR paper emphasizes diverse reasoning paths through heterogeneous relations such as brands, categories, and product features. In our MovieLens graph, the learned policy strongly preferred the user-movie-user-movie pattern. This likely happens because user-movie interaction edges dominate the graph and provide the easiest route to terminal movie nodes.
+
+Our implementation also omits two exploration mechanisms from the original PGPR setup: entropy regularization and action dropout. The original paper uses these to encourage exploration and path diversity. Without them, the policy can more easily collapse onto the first reliable strategy it finds. In our case, that strategy was collaborative filtering through interaction edges.
+
+The hyperparameter results also show that our setup is sensitive to optimization choices. The baseline settings eventually learn, but slowly. More aggressive settings, especially a larger learning rate, smaller batch size, and lower dropout, reach useful rewards much faster. This suggests that applying PGPR to a new domain may require substantial retuning rather than simply copying settings from the original setup.
+
+Finally, the 3-star experiment shows that cleaner interactions are not automatically better for graph-based RL. In our setup, preserving graph connectivity seems more important than filtering the graph to only higher-rated movies. Future work should test this more carefully by rerunning the restricted graph with the best hyperparameters from Section~\ref{fig:hyperparams}.
+
+\section{Conclusion}
+
+In this project, we adapted the core PGPR framework to a MovieLens-based movie recommendation task. Our model learned to navigate a heterogeneous knowledge graph and produce recommendations together with explicit reasoning paths. The strongest results came from the full interaction graph, while the 3-star restricted graph did not learn effectively, suggesting that graph connectivity is especially important in this sparse-reward setting. We also found that training was sensitive to hyperparameters, with higher learning rates, smaller batch sizes, and lower dropout helping the agent learn faster. However, the generated explanations mostly followed collaborative-filtering paths rather than using movie metadata relations. Future work should add stronger exploration methods such as entropy regularization and action dropout, and evaluate recommendation quality using held-out ranking metrics like Hit@10 or NDCG@10.
+
+\section*{Contributions and Acknowledgements}
+
+All team members contributed to the project design, implementation, experiments, and report writing. We acknowledge the authors of PGPR for the original method, GroupLens for the MovieLens-1M dataset, and the developers of PyTorch and PyKEEN for the libraries used in our implementation.
+
+\begin{thebibliography}{9}
+
+\bibitem[Xian et al.(2019)]{xian2019pgpr}
+Yikun Xian, Zuohui Fu, S. Muthukrishnan, Gerard de Melo, and Yongfeng Zhang.
+\newblock Reinforcement Knowledge Graph Reasoning for Explainable Recommendation.
+\newblock In \emph{Proceedings of the 42nd International ACM SIGIR Conference on Research and Development in Information Retrieval}, 2019.
+
+\bibitem[Bordes et al.(2013)]{bordes2013transe}
+Antoine Bordes, Nicolas Usunier, Alberto Garcia-Duran, Jason Weston, and Oksana Yakhnenko.
+\newblock Translating Embeddings for Modeling Multi-relational Data.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2013.
+
+\bibitem[Harper and Konstan(2015)]{movielens}
+F. Maxwell Harper and Joseph A. Konstan.
+\newblock The MovieLens Datasets: History and Context.
+\newblock \emph{ACM Transactions on Interactive Intelligent Systems}, 5(4), 2015.
+
+\bibitem[Ali et al.(2021)]{pykeen}
+Mehdi Ali, Max Berrendorf, Charles Tapley Hoyt, Laurent Vermue, Sahand Sharifzadeh, Volker Tresp, and Jens Lehmann.
+\newblock PyKEEN 1.0: A Python Library for Training and Evaluating Knowledge Graph Embeddings.
+\newblock \emph{Journal of Machine Learning Research}, 22(82):1--6, 2021.
+
+\end{thebibliography}
+
+\end{document}

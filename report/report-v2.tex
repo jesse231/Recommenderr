@@ -145,7 +145,7 @@ For inference, we perform beam search with $K=(25,5,1)$ across the three hops. W
 
 \section{Results}
 
-We evaluate our PGPR implementation in three ways. First, we look at training dynamics for a long baseline run. Second, we sweep learning rate, batch size, and dropout to understand which settings allow the agent to escape the low-reward regime. Third, we inspect the reasoning paths produced at inference time and compare the full graph against a restricted 3-star interaction graph.
+We evaluate our PGPR implementation in three ways. First, we look at training dynamics for a long baseline run. Second, we sweep learning rate, batch size, and dropout to understand which settings allow the agent to escape the low-reward regime. Third, we inspect the reasoning paths produced at inference time and compare the full graph (incentivized toward user engagement) against a restricted 3-star interaction graph (incentivized towards user satisfaction).
 
 \subsection{Training Dynamics}
 
